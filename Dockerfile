@@ -4,7 +4,8 @@ COPY . .
 RUN mvn clean package -DskipTests
 
 # Run stage
-FROM openjdk:17-jdk-slim
+# Yahan humne image change kar di hai jo Render par asani se mil jayegi
+FROM eclipse-temurin:17-jdk-jammy
 COPY --from=build /target/*.jar app.jar
 EXPOSE 8080
-ENTRYPOINT ["java","-jar","/app.jar"]
+ENTRYPOINT ["java","-jar","app.jar"]

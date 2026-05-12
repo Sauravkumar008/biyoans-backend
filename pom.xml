@@ -5,8 +5,7 @@
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.5.5</version>
-        <relativePath/>
+        <version>3.2.5</version> <relativePath/>
     </parent>
     <groupId>com.biyoans</groupId>
     <artifactId>biyoans</artifactId>
@@ -15,8 +14,7 @@
     <description>Backend for Biyoans Coaching Institute</description>
 
     <properties>
-        <java.version>25</java.version>
-    </properties>
+        <java.version>17</java.version> </properties>
 
     <dependencies>
         <dependency>
@@ -40,7 +38,6 @@
             <artifactId>spring-boot-starter-web</artifactId>
         </dependency>
 
-        <!-- ADDED: Cloudinary for Image Storage -->
         <dependency>
             <groupId>com.cloudinary</groupId>
             <artifactId>cloudinary-http44</artifactId>
@@ -48,10 +45,11 @@
         </dependency>
 
         <dependency>
-            <groupId>com.mysql</groupId>
-            <artifactId>mysql-connector-j</artifactId>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
             <scope>runtime</scope>
         </dependency>
+
         <dependency>
             <groupId>org.projectlombok</groupId>
             <artifactId>lombok</artifactId>
@@ -71,18 +69,6 @@
 
     <build>
         <plugins>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-compiler-plugin</artifactId>
-                <configuration>
-                    <annotationProcessorPaths>
-                        <path>
-                            <groupId>org.projectlombok</groupId>
-                            <artifactId>lombok</artifactId>
-                        </path>
-                    </annotationProcessorPaths>
-                </configuration>
-            </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>

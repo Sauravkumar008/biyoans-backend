@@ -4,13 +4,12 @@ import com.biyoans.biyoans.model.SuperUser;
 import com.biyoans.biyoans.model.StudentOfBiyoans;
 import com.biyoans.biyoans.repository.SuperUserRepository;
 import com.biyoans.biyoans.repository.StudentOfBiyoansRepository;
-import com.biyoans.biyoans.service.OtpService; // Naya import
+import com.biyoans.biyoans.service.OtpService;
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.beans.factory.annotation.Value;
 
 import java.io.File;
 import java.io.IOException;
@@ -23,25 +22,24 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 @RestController
-@RequestMapping("/api/superusers")
+// Frontend agar /api/auth use kar raha hai toh ye path best hai
+@RequestMapping("/api/auth") 
 @CrossOrigin(origins = "*")
 public class SuperUserController {
 
     private final SuperUserRepository repo;
     private final PasswordEncoder passwordEncoder;
-    private final OtpService otpService; // JavaMailSender hata kar OtpService lagaya
+    private final OtpService otpService;
     private final StudentOfBiyoansRepository studentRepo;
 
-    // in-memory OTP store: email -> (code,timestampSecs)
     private final ConcurrentHashMap<String, OtpEntry> otpStore = new ConcurrentHashMap<>();
-    // verified flag after OTP verify: email -> true
     private final ConcurrentHashMap<String, Boolean> verifiedEmails = new ConcurrentHashMap<>();
 
-    private static final long OTP_TTL_SECONDS = 10 * 60; // 10 minutes
+    private static final long OTP_TTL_SECONDS = 10 * 60;
 
     public SuperUserController(SuperUserRepository repo,
                                PasswordEncoder passwordEncoder,
-                               OtpService otpService, // Constructor update
+                               OtpService otpService,
                                StudentOfBiyoansRepository studentRepo) {
         this.repo = repo;
         this.passwordEncoder = passwordEncoder;
@@ -62,18 +60,15 @@ public class SuperUserController {
         if (email == null || email.isBlank()) return ResponseEntity.badRequest().body(Map.of("message", "email required"));
         String normalized = email.trim().toLowerCase();
 
-        // OTP Generate
         String code = String.format("%06d", (int)(Math.abs(UUID.randomUUID().getMostSignificantBits()) % 1000000));
         long now = Instant.now().getEpochSecond();
         otpStore.put(normalized, new OtpEntry(code, now));
         verifiedEmails.remove(normalized);
 
         try {
-            // Humari nayi API wali service use kar rahe hain
             otpService.sendOtpEmail(normalized, code); 
             System.out.println("[SuperUser] OTP sent via API to: " + normalized);
         } catch (Exception ex) {
-            ex.printStackTrace();
             return ResponseEntity.status(500).body(Map.of("message", "Failed to send OTP", "detail", ex.getMessage()));
         }
 
@@ -84,20 +79,26 @@ public class SuperUserController {
     @PostMapping("/verify-otp")
     public ResponseEntity<?> verifyOtp(@RequestBody Map<String, String> body) {
         String email = body.get("email");
-        String code = body.get("code");
+        
+        // Fix: Frontend agar "otp" bhej raha hai ya "code", dono handle honge
+        String code = body.containsKey("code") ? body.get("code") : body.get("otp");
+
         if (email == null || email.isBlank() || code == null || code.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("message", "email and code required"));
         }
         String normalized = email.trim().toLowerCase();
         OtpEntry entry = otpStore.get(normalized);
+        
         if (entry == null) {
-            return ResponseEntity.status(404).body(Map.of("message", "OTP not found. Please request a new code."));
+            return ResponseEntity.status(404).body(Map.of("message", "OTP not found. Request again."));
         }
+        
         long now = Instant.now().getEpochSecond();
         if (now - entry.ts > OTP_TTL_SECONDS) {
             otpStore.remove(normalized);
-            return ResponseEntity.status(410).body(Map.of("message", "OTP expired. Please request a new code."));
+            return ResponseEntity.status(410).body(Map.of("message", "OTP expired."));
         }
+        
         if (!entry.code.equals(code.trim())) {
             return ResponseEntity.status(401).body(Map.of("message", "Invalid OTP code"));
         }
@@ -108,7 +109,7 @@ public class SuperUserController {
     }
 
     // ---------- Create SuperUser ----------
-    @PostMapping(consumes = {"multipart/form-data"})
+    @PostMapping(value = "/create-superuser", consumes = {"multipart/form-data"})
     public ResponseEntity<?> createSuperUser(
             @RequestParam String name,
             @RequestParam(required = false) String gender,
@@ -120,24 +121,17 @@ public class SuperUserController {
             @RequestParam(required = false, name = "photo") MultipartFile photo
     ) throws IOException {
 
-        String un = username.trim();
         String em = email.trim().toLowerCase();
-        String phone = phoneNumber.trim();
-
         if (!Boolean.TRUE.equals(verifiedEmails.get(em))) {
-            return ResponseEntity.status(403).body(Map.of("message", "Email not verified. Please verify OTP."));
+            return ResponseEntity.status(403).body(Map.of("message", "Email not verified."));
         }
-
-        if (repo.existsByUsername(un)) return ResponseEntity.status(409).body(Map.of("message", "Username exists"));
-        if (repo.existsByEmail(em)) return ResponseEntity.status(409).body(Map.of("message", "Email exists"));
-        if (repo.existsByPhoneNumber(phone)) return ResponseEntity.status(409).body(Map.of("message", "Phone number exists"));
 
         SuperUser su = new SuperUser();
         su.setName(name);
         su.setGender(gender);
-        su.setPhoneNumber(phone);
+        su.setPhoneNumber(phoneNumber.trim());
         su.setEmail(em);
-        su.setUsername(un);
+        su.setUsername(username.trim());
         su.setPassword(passwordEncoder.encode(password));
         su.setRole((role == null || role.isBlank()) ? "TEACHER" : role.toUpperCase());
 
@@ -151,7 +145,7 @@ public class SuperUserController {
 
         repo.save(su);
         verifiedEmails.remove(em);
-        return ResponseEntity.ok(Map.of("message", "SuperUser created successfully", "user", su));
+        return ResponseEntity.ok(Map.of("message", "SuperUser created", "user", su));
     }
 
     // ---------- Create Student ----------
@@ -175,21 +169,13 @@ public class SuperUserController {
                 return ResponseEntity.status(403).body(Map.of("message", "Email not verified."));
             }
 
-            if (studentRepo.findByEmail(em).isPresent()) return ResponseEntity.status(409).body(Map.of("message", "Email registered"));
-            if (studentRepo.existsByWhatsAppNumber(whatsAppNumber)) return ResponseEntity.status(409).body(Map.of("message", "Phone registered"));
-
             StudentOfBiyoans s = new StudentOfBiyoans();
             s.setUserName(userName);
             s.setQualification(qualification);
             s.setFatherName(fatherName);
             s.setMotherName(motherName);
             if (aadharNumber != null && !aadharNumber.isBlank()) s.setAadharNumber(aadharNumber);
-
-            if (dob != null && !dob.isBlank()) {
-                try { s.setDob(LocalDate.parse(dob)); } catch (DateTimeParseException ex) {
-                    return ResponseEntity.badRequest().body(Map.of("message", "Invalid dob format. Use yyyy-MM-dd"));
-                }
-            }
+            if (dob != null && !dob.isBlank()) s.setDob(LocalDate.parse(dob));
 
             s.setEmail(em);
             s.setWhatsAppNumber(whatsAppNumber);
@@ -207,9 +193,9 @@ public class SuperUserController {
 
             studentRepo.save(s);
             verifiedEmails.remove(em);
-            return ResponseEntity.ok(Map.of("message", "Student created successfully", "student", s));
+            return ResponseEntity.ok(Map.of("message", "Student created successfully"));
         } catch (Exception ex) {
-            return ResponseEntity.status(500).body(Map.of("message", "Failed", "detail", ex.getMessage()));
+            return ResponseEntity.status(500).body(Map.of("message", "Error", "detail", ex.getMessage()));
         }
     }
 
@@ -218,21 +204,11 @@ public class SuperUserController {
     public ResponseEntity<?> login(@RequestBody Map<String, String> req) {
         String identifier = req.get("username");
         String password = req.get("password");
-        if (identifier == null || identifier.isBlank() || password == null || password.isBlank()) {
-            return ResponseEntity.badRequest().body(Map.of("message", "Username/email and password required"));
+        Optional<SuperUser> opt = repo.findByUsernameOrEmail(identifier.trim(), identifier.trim());
+        if (opt.isPresent() && passwordEncoder.matches(password, opt.get().getPassword())) {
+            SuperUser su = opt.get();
+            return ResponseEntity.ok(Map.of("id", su.getId(), "username", su.getUsername(), "role", su.getRole(), "type", "SUPERUSER"));
         }
-        String idTrim = identifier.trim();
-        Optional<SuperUser> opt = repo.findByUsernameOrEmail(idTrim, idTrim);
-        if (opt.isEmpty() || !passwordEncoder.matches(password, opt.get().getPassword())) {
-            return ResponseEntity.status(401).body(Map.of("message", "Invalid credentials"));
-        }
-        SuperUser su = opt.get();
-        Map<String, Object> resp = new java.util.HashMap<>();
-        resp.put("id", su.getId());
-        resp.put("type", "SUPERUSER");
-        resp.put("username", su.getUsername());
-        resp.put("role", su.getRole());
-        resp.put("name", su.getName());
-        return ResponseEntity.ok(resp);
+        return ResponseEntity.status(401).body(Map.of("message", "Invalid credentials"));
     }
 }

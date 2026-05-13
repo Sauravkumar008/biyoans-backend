@@ -3,6 +3,7 @@ package com.biyoans.biyoans.config;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -13,19 +14,21 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import java.util.List;
 
 @Configuration
+@EnableWebSecurity // 👈 Ye annotation add karlo better sync ke liye
 public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
-                .cors().and()
-                .csrf(csrf -> csrf.disable())  // ❌ Disable CSRF for APIs
-                .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/**").permitAll()  // ✅ Allow ALL endpoints
-                        .anyRequest().permitAll()
-                )
-                .formLogin(form -> form.disable())   // ❌ Disable default login page
-                .httpBasic(basic -> basic.disable()); // ❌ Disable HTTP Basic Auth
+            .cors(cors -> cors.configurationSource(corsConfigurationSource())) // ✅ Modern Syntax
+            .csrf(csrf -> csrf.disable())  // ❌ Disable CSRF
+            .authorizeHttpRequests(auth -> auth
+                .requestMatchers("/api/**").permitAll() // ✅ API endpoints open rakho
+                .requestMatchers("/uploads/**").permitAll() // ✅ Photos/Images access allow karo
+                .anyRequest().permitAll() // ✅ Saara system open (Testing ke liye best)
+            )
+            .formLogin(form -> form.disable())   
+            .httpBasic(basic -> basic.disable()); 
 
         return http.build();
     }
@@ -33,11 +36,11 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOriginPatterns(List.of("*")); // ✅ Allow ALL origins in dev
+        config.setAllowedOriginPatterns(List.of("*")); 
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setExposedHeaders(List.of("Authorization", "Content-Type"));
-        config.setAllowCredentials(false); // keep it simple
+        config.setAllowCredentials(false); 
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", config);

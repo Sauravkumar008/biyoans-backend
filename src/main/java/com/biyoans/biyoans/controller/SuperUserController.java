@@ -4,13 +4,12 @@ import com.biyoans.biyoans.model.SuperUser;
 import com.biyoans.biyoans.model.StudentOfBiyoans;
 import com.biyoans.biyoans.repository.SuperUserRepository;
 import com.biyoans.biyoans.repository.StudentOfBiyoansRepository;
+import com.biyoans.biyoans.service.OtpService; // Naya import
 
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
-import org.springframework.mail.javamail.JavaMailSender;
-import org.springframework.mail.SimpleMailMessage;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.io.File;
@@ -30,7 +29,7 @@ public class SuperUserController {
 
     private final SuperUserRepository repo;
     private final PasswordEncoder passwordEncoder;
-    private final JavaMailSender mailSender;
+    private final OtpService otpService; // JavaMailSender hata kar OtpService lagaya
     private final StudentOfBiyoansRepository studentRepo;
 
     // in-memory OTP store: email -> (code,timestampSecs)
@@ -40,16 +39,13 @@ public class SuperUserController {
 
     private static final long OTP_TTL_SECONDS = 10 * 60; // 10 minutes
 
-    @Value("${spring.mail.username:}")
-    private String mailFrom;
-
     public SuperUserController(SuperUserRepository repo,
                                PasswordEncoder passwordEncoder,
-                               JavaMailSender mailSender,
+                               OtpService otpService, // Constructor update
                                StudentOfBiyoansRepository studentRepo) {
         this.repo = repo;
         this.passwordEncoder = passwordEncoder;
-        this.mailSender = mailSender;
+        this.otpService = otpService;
         this.studentRepo = studentRepo;
     }
 
@@ -66,25 +62,21 @@ public class SuperUserController {
         if (email == null || email.isBlank()) return ResponseEntity.badRequest().body(Map.of("message", "email required"));
         String normalized = email.trim().toLowerCase();
 
-        // generate 6-digit numeric code
+        // OTP Generate
         String code = String.format("%06d", (int)(Math.abs(UUID.randomUUID().getMostSignificantBits()) % 1000000));
         long now = Instant.now().getEpochSecond();
         otpStore.put(normalized, new OtpEntry(code, now));
         verifiedEmails.remove(normalized);
 
         try {
-            SimpleMailMessage msg = new SimpleMailMessage();
-            msg.setTo(normalized);
-            msg.setSubject("Your Biyoans verification code");
-            msg.setText("Your verification code is: " + code + " (valid for " + (OTP_TTL_SECONDS/60) + " minutes)");
-            if (mailFrom != null && !mailFrom.isBlank()) msg.setFrom(mailFrom);
-            mailSender.send(msg);
+            // Humari nayi API wali service use kar rahe hain
+            otpService.sendOtpEmail(normalized, code); 
+            System.out.println("[SuperUser] OTP sent via API to: " + normalized);
         } catch (Exception ex) {
             ex.printStackTrace();
             return ResponseEntity.status(500).body(Map.of("message", "Failed to send OTP", "detail", ex.getMessage()));
         }
 
-        // DEV: return code in response to ease testing. Remove in production.
         return ResponseEntity.ok(Map.of("message", "OTP sent", "debug_code", code));
     }
 
@@ -109,13 +101,13 @@ public class SuperUserController {
         if (!entry.code.equals(code.trim())) {
             return ResponseEntity.status(401).body(Map.of("message", "Invalid OTP code"));
         }
-        // success
+        
         verifiedEmails.put(normalized, true);
         otpStore.remove(normalized);
         return ResponseEntity.ok(Map.of("message", "OTP verified"));
     }
 
-    // ---------- Create SuperUser (Teacher/Admin) ----------
+    // ---------- Create SuperUser ----------
     @PostMapping(consumes = {"multipart/form-data"})
     public ResponseEntity<?> createSuperUser(
             @RequestParam String name,
@@ -132,20 +124,13 @@ public class SuperUserController {
         String em = email.trim().toLowerCase();
         String phone = phoneNumber.trim();
 
-        // OTP verification required
         if (!Boolean.TRUE.equals(verifiedEmails.get(em))) {
-            return ResponseEntity.status(403).body(Map.of("message", "Email not verified with OTP. Please verify OTP before creating user."));
+            return ResponseEntity.status(403).body(Map.of("message", "Email not verified. Please verify OTP."));
         }
 
-        if (repo.existsByUsername(un)) {
-            return ResponseEntity.status(409).body(Map.of("message", "Username already exists"));
-        }
-        if (repo.existsByEmail(em)) {
-            return ResponseEntity.status(409).body(Map.of("message", "Email already exists"));
-        }
-        if (repo.existsByPhoneNumber(phone)) {
-            return ResponseEntity.status(409).body(Map.of("message", "Phone number already exists"));
-        }
+        if (repo.existsByUsername(un)) return ResponseEntity.status(409).body(Map.of("message", "Username exists"));
+        if (repo.existsByEmail(em)) return ResponseEntity.status(409).body(Map.of("message", "Email exists"));
+        if (repo.existsByPhoneNumber(phone)) return ResponseEntity.status(409).body(Map.of("message", "Phone number exists"));
 
         SuperUser su = new SuperUser();
         su.setName(name);
@@ -156,19 +141,11 @@ public class SuperUserController {
         su.setPassword(passwordEncoder.encode(password));
         su.setRole((role == null || role.isBlank()) ? "TEACHER" : role.toUpperCase());
 
-        // Handle photo upload
         if (photo != null && !photo.isEmpty()) {
-            // Save uploads to a fixed folder relative to your project
             File uploadDir = new File("uploads");
-            if (!uploadDir.exists()) {
-                uploadDir.mkdirs(); // create uploads directory if not exists
-            }
-
+            if (!uploadDir.exists()) uploadDir.mkdirs();
             String fileName = UUID.randomUUID() + "_" + photo.getOriginalFilename().replaceAll("\\s+", "_");
-            File dest = new File(uploadDir, fileName);  // <-- safe path outside Tomcat temp
-            photo.transferTo(dest);
-
-            // Save relative path to DB
+            photo.transferTo(new File(uploadDir, fileName));
             su.setPhotoUrl("/uploads/" + fileName);
         }
 
@@ -177,8 +154,7 @@ public class SuperUserController {
         return ResponseEntity.ok(Map.of("message", "SuperUser created successfully", "user", su));
     }
 
-    // ---------- Create Student (uses same OTP verification) ----------
-    // Endpoint: POST /api/superusers/create-student  (multipart/form-data)
+    // ---------- Create Student ----------
     @PostMapping(value = "/create-student", consumes = {"multipart/form-data"})
     public ResponseEntity<?> createStudent(
             @RequestParam String userName,
@@ -186,7 +162,7 @@ public class SuperUserController {
             @RequestParam String fatherName,
             @RequestParam(required = false) String motherName,
             @RequestParam(required = false) String aadharNumber,
-            @RequestParam(required = false) String dob, // yyyy-MM-dd
+            @RequestParam(required = false) String dob, 
             @RequestParam String email,
             @RequestParam String whatsAppNumber,
             @RequestParam String userPass,
@@ -195,17 +171,12 @@ public class SuperUserController {
     ) {
         try {
             String em = email.trim().toLowerCase();
-
             if (!Boolean.TRUE.equals(verifiedEmails.get(em))) {
-                return ResponseEntity.status(403).body(Map.of("message", "Email not verified with OTP. Please verify OTP before creating account."));
+                return ResponseEntity.status(403).body(Map.of("message", "Email not verified."));
             }
 
-            if (studentRepo.findByEmail(em).isPresent()) {
-                return ResponseEntity.status(409).body(Map.of("message", "Email already registered as student"));
-            }
-            if (studentRepo.existsByWhatsAppNumber(whatsAppNumber)) {
-                return ResponseEntity.status(409).body(Map.of("message", "Phone number already registered as student"));
-            }
+            if (studentRepo.findByEmail(em).isPresent()) return ResponseEntity.status(409).body(Map.of("message", "Email registered"));
+            if (studentRepo.existsByWhatsAppNumber(whatsAppNumber)) return ResponseEntity.status(409).body(Map.of("message", "Phone registered"));
 
             StudentOfBiyoans s = new StudentOfBiyoans();
             s.setUserName(userName);
@@ -215,10 +186,7 @@ public class SuperUserController {
             if (aadharNumber != null && !aadharNumber.isBlank()) s.setAadharNumber(aadharNumber);
 
             if (dob != null && !dob.isBlank()) {
-                try {
-                    LocalDate ld = LocalDate.parse(dob);
-                    s.setDob(ld);
-                } catch (DateTimeParseException ex) {
+                try { s.setDob(LocalDate.parse(dob)); } catch (DateTimeParseException ex) {
                     return ResponseEntity.badRequest().body(Map.of("message", "Invalid dob format. Use yyyy-MM-dd"));
                 }
             }
@@ -229,19 +197,11 @@ public class SuperUserController {
             s.setGender(gender);
             s.setRole("STUDENT");
 
-            // Handle photo upload
             if (photo != null && !photo.isEmpty()) {
-                // Save uploads to a fixed folder relative to your project
                 File uploadDir = new File("uploads");
-                if (!uploadDir.exists()) {
-                    uploadDir.mkdirs(); // create uploads directory if not exists
-                }
-
+                if (!uploadDir.exists()) uploadDir.mkdirs();
                 String fileName = UUID.randomUUID() + "_" + photo.getOriginalFilename().replaceAll("\\s+", "_");
-                File dest = new File(uploadDir, fileName);  // <-- safe path outside Tomcat temp
-                photo.transferTo(dest);
-
-                // Save relative path to DB
+                photo.transferTo(new File(uploadDir, fileName));
                 s.setPhotoUrl("/uploads/" + fileName);
             }
 
@@ -249,43 +209,30 @@ public class SuperUserController {
             verifiedEmails.remove(em);
             return ResponseEntity.ok(Map.of("message", "Student created successfully", "student", s));
         } catch (Exception ex) {
-            ex.printStackTrace();
-            return ResponseEntity.status(500).body(Map.of("message", "Failed to create student", "detail", ex.getMessage()));
+            return ResponseEntity.status(500).body(Map.of("message", "Failed", "detail", ex.getMessage()));
         }
     }
 
-    // ---------- Login (SuperUser) ----------
+    // ---------- Login ----------
     @PostMapping("/login")
     public ResponseEntity<?> login(@RequestBody Map<String, String> req) {
         String identifier = req.get("username");
         String password = req.get("password");
-
         if (identifier == null || identifier.isBlank() || password == null || password.isBlank()) {
             return ResponseEntity.badRequest().body(Map.of("message", "Username/email and password required"));
         }
-
         String idTrim = identifier.trim();
         Optional<SuperUser> opt = repo.findByUsernameOrEmail(idTrim, idTrim);
-        if (opt.isEmpty()) {
-            return ResponseEntity.status(401).body(Map.of("message", "Invalid username or password"));
+        if (opt.isEmpty() || !passwordEncoder.matches(password, opt.get().getPassword())) {
+            return ResponseEntity.status(401).body(Map.of("message", "Invalid credentials"));
         }
-
         SuperUser su = opt.get();
-        if (!passwordEncoder.matches(password, su.getPassword())) {
-            return ResponseEntity.status(401).body(Map.of("message", "Invalid username or password"));
-        }
-
         Map<String, Object> resp = new java.util.HashMap<>();
-        resp.put("message", "Login successful");
-        resp.put("type", "SUPERUSER");
         resp.put("id", su.getId());
+        resp.put("type", "SUPERUSER");
         resp.put("username", su.getUsername());
         resp.put("role", su.getRole());
         resp.put("name", su.getName());
-        resp.put("email", su.getEmail());
-        resp.put("phoneNumber", su.getPhoneNumber());
-        resp.put("photoUrl", su.getPhotoUrl());
-
         return ResponseEntity.ok(resp);
     }
 }

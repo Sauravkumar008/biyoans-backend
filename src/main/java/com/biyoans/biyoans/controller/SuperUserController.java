@@ -129,4 +129,80 @@ public class SuperUserController {
         su.setRole((role == null || role.isBlank()) ? "TEACHER" : role.toUpperCase());
 
         if (photo != null && !photo.isEmpty()) {
-            File
+            File uploadDir = new File("uploads");
+            if (!uploadDir.exists()) uploadDir.mkdirs();
+            String fileName = UUID.randomUUID() + "_" + photo.getOriginalFilename().replaceAll("\\s+", "_");
+            photo.transferTo(new File(uploadDir, fileName));
+            su.setPhotoUrl("/uploads/" + fileName);
+        }
+
+        repo.save(su);
+        verifiedEmails.remove(em);
+        return ResponseEntity.ok(Map.of("message", "SuperUser created successfully"));
+    }
+
+    // ---------- Create Student ----------
+    @PostMapping(value = "/create-student", consumes = {"multipart/form-data"})
+    public ResponseEntity<?> createStudent(
+            @RequestParam String userName,
+            @RequestParam String qualification,
+            @RequestParam String fatherName,
+            @RequestParam(required = false) String motherName,
+            @RequestParam(required = false) String aadharNumber,
+            @RequestParam(required = false) String dob, 
+            @RequestParam String email,
+            @RequestParam String whatsAppNumber,
+            @RequestParam String userPass,
+            @RequestParam String gender,
+            @RequestParam(required = false, name = "photo") MultipartFile photo
+    ) {
+        try {
+            String em = email.trim().toLowerCase();
+            if (!Boolean.TRUE.equals(verifiedEmails.get(em))) {
+                return ResponseEntity.status(403).body(Map.of("message", "Email not verified."));
+            }
+
+            StudentOfBiyoans s = new StudentOfBiyoans();
+            s.setUserName(userName);
+            s.setQualification(qualification);
+            s.setFatherName(fatherName);
+            s.setMotherName(motherName);
+            if (aadharNumber != null && !aadharNumber.isBlank()) s.setAadharNumber("[Aadhaar Redacted]"); 
+
+            if (dob != null && !dob.isBlank()) s.setDob(LocalDate.parse(dob));
+
+            s.setEmail(em);
+            s.setWhatsAppNumber(whatsAppNumber);
+            s.setUserPass(passwordEncoder.encode(userPass));
+            s.setGender(gender);
+            s.setRole("STUDENT");
+
+            if (photo != null && !photo.isEmpty()) {
+                File uploadDir = new File("uploads");
+                if (!uploadDir.exists()) uploadDir.mkdirs();
+                String fileName = UUID.randomUUID() + "_" + photo.getOriginalFilename().replaceAll("\\s+", "_");
+                photo.transferTo(new File(uploadDir, fileName));
+                s.setPhotoUrl("/uploads/" + fileName);
+            }
+
+            studentRepo.save(s);
+            verifiedEmails.remove(em);
+            return ResponseEntity.ok(Map.of("message", "Student created successfully"));
+        } catch (Exception ex) {
+            return ResponseEntity.status(500).body(Map.of("message", "Error", "detail", ex.getMessage()));
+        }
+    }
+
+    // ---------- Login ----------
+    @PostMapping("/login")
+    public ResponseEntity<?> login(@RequestBody Map<String, String> req) {
+        String identifier = req.get("username");
+        String password = req.get("password");
+        Optional<SuperUser> opt = repo.findByUsernameOrEmail(identifier.trim(), identifier.trim());
+        if (opt.isPresent() && passwordEncoder.matches(password, opt.get().getPassword())) {
+            SuperUser su = opt.get();
+            return ResponseEntity.ok(Map.of("id", su.getId(), "username", su.getUsername(), "role", su.getRole(), "type", "SUPERUSER"));
+        }
+        return ResponseEntity.status(401).body(Map.of("message", "Invalid credentials"));
+    }
+}
